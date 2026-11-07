@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laboratório Multigrid</title>
+<style>
+  :root { --bg:#fff; --fg:#222; --card:#f6f6f6; --borda:#ddd; --azul:#2459a6;
+          --meta:#eef3fb; --erro-bg:#fde2e1; --erro-bd:#e0a0a0; --pre:#fafafa; --dest:#e6f4ea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181c; --fg:#e6e6e6; --card:#22262c; --borda:#3a3f47; --azul:#7fb0ff;
+            --meta:#1d2733; --erro-bg:#4a2321; --erro-bd:#8a4a47; --pre:#1c1f24; --dest:#1f3326; }
+  }
+  body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 1.5rem auto;
+         padding: 0 1rem; background: var(--bg); color: var(--fg); }
+  h1 { font-size: 1.35rem; margin: 0 0 1rem; }
+  h2 { font-size: 1.05rem; margin: 1.6rem 0 .5rem; }
+  fieldset { border: 1px solid var(--borda); border-radius: 8px; background: var(--card);
+             padding: .4rem 1.1rem .8rem; margin: 0 0 .9rem; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  .linha { display: grid; grid-template-columns: 14rem 1fr 7rem; gap: .75rem;
+           align-items: center; margin: .55rem 0; }
+  .linha > label { font-weight: 500; }
+  .linha input[type=range] { width: 100%; }
+  .linha output { font-family: monospace; font-weight: 700; color: var(--azul); text-align: right; }
+  .grupo { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .grupo input { position: absolute; opacity: 0; }
+  .grupo label { padding: .35rem .8rem; border: 1px solid var(--borda); border-radius: 6px;
+                 cursor: pointer; background: var(--bg); }
+  .grupo input:checked + label { background: var(--azul); color: #fff; border-color: var(--azul); }
+  .grupo input:focus-visible + label { outline: 2px solid var(--azul); outline-offset: 2px; }
+  .acoes { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: .6rem; }
+  button { font: inherit; padding: .45rem 1rem; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--azul); background: var(--azul); color: #fff; }
+  button.sec { background: transparent; color: var(--azul); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .auto { margin-left: auto; font-size: .9rem; }
+  .dica { font-size: .82rem; opacity: .75; margin: .4rem 0 0; }
+  #status { margin: 1rem 0 0; font-style: italic; opacity: .8; min-height: 1.3em; }
+  .erro { background: var(--erro-bg); border: 1px solid var(--erro-bd); padding: .75rem 1rem;
+          border-radius: 6px; margin-top: 1rem; white-space: pre-wrap; }
+  .cmd { font-family: monospace; background: var(--meta); padding: .5rem .8rem;
+         border-radius: 6px; margin-top: 1rem; overflow-x: auto; font-size: .85rem; }
+  table { border-collapse: collapse; margin: .4rem 0; font-size: .9rem; }
+  th, td { padding: .25rem .9rem .25rem 0; text-align: left; }
+  td:not(:first-child) { font-family: monospace; }
+  thead th { border-bottom: 1px solid var(--borda); }
+  tr.melhor td { background: var(--dest); }
+  .rolar { overflow-x: auto; }
+  img { max-width: 100%; border: 1px solid var(--borda); border-radius: 6px; background: #fff; }
+  pre { background: var(--pre); border: 1px solid var(--borda); border-radius: 6px;
+        padding: 1rem; overflow-x: auto; font-size: .8rem; line-height: 1.35; }
+  [hidden] { display: none !important; }
+  @media (max-width: 700px) { .linha { grid-template-columns: 1fr; } .linha output { text-align: left; } }
+</style>
+</head>
+<body>
+<h1>Laboratório Multigrid — FMG para Poisson 2D</h1>
+
+<fieldset>
+  <legend>Problema e malha</legend>
+  <div class="linha">
+    <label for="k">Malha <em>N</em> (16·2<sup>k</sup>)</label>
+    <input type="range" id="k" min="0" max="{{ kmax }}" step="1" value="3">
+    <output id="k_out"></output>
+  </div>
+  <div class="linha">
+    <label for="K">Frequência <em>K</em></label>
+    <input type="range" id="K" min="1" max="8" step="0.5" value="4">
+    <output id="K_out"></output>
+  </div>
+  <div class="linha">
+    <label for="EXP">Termos <em>EXP</em></label>
+    <input type="range" id="EXP" min="1" max="3" step="1" value="1">
+    <output id="EXP_out"></output>
+  </div>
+  <div class="linha">
+    <label for="tol">Tolerância global</label>
+    <input type="range" id="tol" min="1" max="14" step="1" value="7">
+    <output id="tol_out"></output>
+  </div>
+  <p class="dica">u = S(x)·S(y), S(t) = Σ<sub>j=1..EXP</sub> sen(K<sup>j</sup>πt). Alterar EXP recompila o executável (alguns segundos na primeira vez).
+  Cada execução resolve a malha N <em>e</em> 2N para estimar a ordem p; o gráfico é o da malha 2N.</p>
+</fieldset>
+
+<fieldset>
+  <legend>A — suavizador</legend>
+  <div class="linha">
+    <label>Método</label>
+    <div class="grupo" id="g_A"></div><span></span>
+  </div>
+  <div class="linha">
+    <label for="omA">Peso ω<sub>A</sub></label>
+    <input type="range" id="omA" min="0.1" max="1.95" step="0.05" value="1">
+    <output id="omA_out"></output>
+  </div>
+  <div class="linha">
+    <label for="nu1">Pré-suavizações ν<sub>1</sub></label>
+    <input type="range" id="nu1" min="1" max="6" step="1" value="1">
+    <output id="nu1_out"></output>
+  </div>
+  <div class="linha">
+    <label for="nu2">Pós-suavizações ν<sub>2</sub></label>
+    <input type="range" id="nu2" min="1" max="6" step="1" value="1">
+    <output id="nu2_out"></output>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>B — solver da malha mais grossa</legend>
+  <div class="linha">
+    <label>Método</label>
+    <div class="grupo" id="g_B"></div><span></span>
+  </div>
+  <div class="linha" id="l_omB">
+    <label for="omB">Peso ω<sub>B</sub></label>
+    <input type="range" id="omB" min="0.1" max="1.95" step="0.05" value="0.8">
+    <output id="omB_out"></output>
+  </div>
+  <div class="linha" id="l_tolB">
+    <label for="tolB">Tolerância de B</label>
+    <input type="range" id="tolB" min="1" max="14" step="1" value="10">
+    <output id="tolB_out"></output>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>C — aproximação inicial do FMG</legend>
+  <div class="linha">
+    <label>Método</label>
+    <div class="grupo" id="g_C"></div><span></span>
+  </div>
+  <div class="linha" id="l_omC">
+    <label for="omC">Peso ω<sub>C</sub></label>
+    <input type="range" id="omC" min="0.1" max="1.95" step="0.05" value="0.8">
+    <output id="omC_out"></output>
+  </div>
+  <div class="linha" id="l_tolC">
+    <label for="tolC">Tolerância de C</label>
+    <input type="range" id="tolC" min="1" max="14" step="1" value="2">
+    <output id="tolC_out"></output>
+  </div>
+</fieldset>
+
+<div class="acoes">
+  <button id="b_exec">Executar</button>
+  <button id="b_comp" class="sec" title="Roda as 50 combinações A/B/C com os pesos padrão de cada método">Comparar as 50 combinações A/B/C</button>
+  <label class="auto"><input type="checkbox" id="auto" checked> executar ao mexer nos controles</label>
+</div>
+<p class="dica">Na comparação das 50 combinações vale N ≤ {{ 16 * 2 ** kmax_comparar }} e cada método usa o seu peso padrão
+(Jacobi 0,8, Gauss-Seidel 1,0); K, EXP, ν₁, ν₂ e as tolerâncias seguem os sliders. Pesos muito altos podem divergir e estourar o tempo limite.</p>
+
+<div id="status"></div>
+<div id="erro" class="erro" hidden></div>
+
+<div id="saida" hidden>
+  <div class="cmd" id="cmd"></div>
+  <h2>Resultados</h2>
+  <div class="rolar"><table id="tab"></table></div>
+  <div id="figs"></div>
+  <h2>Saída do programa</h2>
+  <pre id="log"></pre>
+</div>
+
+<div id="saida_comp" hidden>
+  <h2 id="t_comp"></h2>
+  <div class="rolar"><table id="tab_comp"></table></div>
+  <div id="figs_comp"></div>
+</div>
+
+<script>
+(() => {
+  const PADRAO = {{ padrao_js|safe }};
+  const NOMES = {{ nomes_js|safe }};
+  const KMAXC = {{ kmax_comparar }};
+  const KMAX = {{ kmax }};
+  const $ = id => document.getElementById(id);
+  const val = nome => document.querySelector(`input[name=${nome}]:checked`).value;
+
+  // ---- botões de rádio de A, B, C
+  const padraoAB = {A: 2, B: 1, C: 1};
+  for (const L of ["A", "B", "C"]) {
+    $("g_" + L).innerHTML = Object.entries(NOMES[L]).map(([v, n]) =>
+      `<input type="radio" name="${L}" id="${L}${v}" value="${v}" ${+v === padraoAB[L] ? "checked" : ""}>` +
+      `<label for="${L}${v}">${n}</label>`).join("");
+  }
+  // ω padrão de cada método (Jacobi / Gauss-Seidel)
+  const omegaPadrao = (L, v) => {
+    const gs = (L === "A" && v === 2) || (L === "B" && v === 5) || (L === "C" && v === 2);
+    return gs ? PADRAO.OMEGAGS : PADRAO.OMEGA;
+  };
+
+  // ---- valores iniciais vindos do código C
+  $("K").value = PADRAO.K; $("EXP").value = PADRAO.EXP;
+  $("nu1").value = PADRAO.NU1; $("nu2").value = PADRAO.NU2;
+  $("tol").value = PADRAO.TOL; $("tolB").value = PADRAO.TOLB; $("tolC").value = PADRAO.TOLC;
+  $("omA").value = omegaPadrao("A", 2); $("omB").value = omegaPadrao("B", 1); $("omC").value = omegaPadrao("C", 1);
+
+  let timer = null, ctrl = null, ultimaChave = "";
+
+  function atualizar() {
+    $("k_out").textContent = "n = " + 16 * 2 ** (+$("k").value);
+    $("K_out").textContent = (+$("K").value).toFixed(1);
+    $("EXP_out").textContent = $("EXP").value + "  (freq. até " +
+        (Math.pow(+$("K").value, +$("EXP").value)).toPrecision(3) + "π)";
+    $("tol_out").textContent = "10^-" + $("tol").value;
+    $("omA_out").textContent = (+$("omA").value).toFixed(2);
+    $("nu1_out").textContent = $("nu1").value;
+    $("nu2_out").textContent = $("nu2").value;
+    $("omB_out").textContent = (+$("omB").value).toFixed(2);
+    $("tolB_out").textContent = "10^-" + $("tolB").value;
+    $("omC_out").textContent = (+$("omC").value).toFixed(2);
+    $("tolC_out").textContent = "10^-" + $("tolC").value;
+    $("l_omB").hidden = $("l_tolB").hidden = +val("B") < 4;     // B iterativo: 4 e 5
+    $("l_omC").hidden = $("l_tolC").hidden = +val("C") > 2;     // C iterativo: 1 e 2
+  }
+
+  function params() {
+    return new URLSearchParams({
+      k: $("k").value, K: $("K").value, EXP: $("EXP").value, tol: $("tol").value,
+      A: val("A"), omA: $("omA").value, nu1: $("nu1").value, nu2: $("nu2").value,
+      B: val("B"), omB: $("omB").value, tolB: $("tolB").value,
+      C: val("C"), omC: $("omC").value, tolC: $("tolC").value });
+  }
+
+  function erro(msg) { $("erro").textContent = msg; $("erro").hidden = false; }
+  function ocupado(b) { $("b_exec").disabled = $("b_comp").disabled = b;
+                        $("status").textContent = b ? "Calculando…" : ""; }
+
+  async function chamar(url, ok) {
+    if (ctrl) ctrl.abort();
+    ctrl = new AbortController();
+    $("erro").hidden = true; ocupado(true);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal });
+      const d = await r.json();
+      if (!r.ok) { erro(d.erro || "Erro desconhecido."); return; }
+      ok(d);
+    } catch (e) {
+      if (e.name !== "AbortError") erro("Falha de rede: " + e.message);
+    } finally { ocupado(false); }
+  }
+
+  const figs = lista => lista.map(f => `<h2>${f.titulo}</h2><img src="${f.img}" alt="${f.titulo}">`).join("");
+
+  function executar() {
+    const q = params().toString(); ultimaChave = q;
+    chamar("/api/executar?" + q, d => {
+      $("cmd").textContent = d.comando + "   ← entrada: " + d.entrada;
+      const [r0, ...resto] = d.resultados;     // cabeçalho = linha "Malha N"
+      $("tab").innerHTML = "<tbody>" + d.resultados.map(
+        l => "<tr>" + l.map((c, i) => i === 0 ? `<th scope="row">${c}</th>` : `<td>${c}</td>`).join("") + "</tr>").join("") + "</tbody>";
+      $("figs").innerHTML = figs(d.figuras);
+      $("log").textContent = d.log;
+      $("saida").hidden = false;
+    });
+  }
+
+  function comparar() {
+    if (+$("k").value > KMAXC) { erro(`Para comparar as 50 combinações use N ≤ ${16 * 2 ** KMAXC}.`); return; }
+    chamar("/api/comparar?" + params().toString(), d => {
+      $("t_comp").textContent = `Comparação das 50 combinações — N = ${d.N} (ordenadas por tempo)`;
+      $("tab_comp").innerHTML = "<thead><tr>" + d.cabecalho.map(c => `<th>${c}</th>`).join("") + "</tr></thead><tbody>" +
+        d.linhas.map((l, i) => `<tr${i === 0 ? ' class="melhor"' : ""}>` + l.map(c => `<td>${c}</td>`).join("") + "</tr>").join("") + "</tbody>";
+      $("figs_comp").innerHTML = figs(d.figuras);
+      $("saida_comp").hidden = false;
+    });
+  }
+
+  function mudou(ev) {
+    // trocar o método reaplica o ω padrão daquele método
+    const n = ev && ev.target && ev.target.name;
+    if (n === "A") $("omA").value = omegaPadrao("A", +val("A"));
+    if (n === "B") $("omB").value = omegaPadrao("B", +val("B"));
+    if (n === "C") $("omC").value = omegaPadrao("C", +val("C"));
+    atualizar();
+    if (!$("auto").checked) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => { if (params().toString() !== ultimaChave) executar(); }, 500);
+  }
+
+  for (const el of document.querySelectorAll("fieldset input")) el.addEventListener("input", mudou);
+  $("b_exec").addEventListener("click", executar);
+  $("b_comp").addEventListener("click", comparar);
+
+  atualizar();
+  executar();
+})();
+</script>
+</body>
+</html>
